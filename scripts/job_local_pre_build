@@ -1,0 +1,60 @@
+#!/bin/bash -xe
+#
+# Copyright (c) 2014 Intel, Inc.
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the Free
+# Software Foundation; version 2 of the License
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc., 59
+# Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+jenkins_script_dir=$(dirname $0)
+source $jenkins_script_dir/common_functions
+
+# Clone & sync source code
+function prepare_tizen_src()
+{
+    pushd $TIZEN_SOURCE
+    repo init -u $MANIFEST_URL -b $MANIFEST_BRANCH -m ${PROFILE}.xml
+    repo sync
+    popd
+}
+
+#MAIN START
+
+prepare_build_env
+
+prepare_tizen_src
+
+if [ -n "$GBS_PROFILE" ]; then
+profile_name=$GBS_PROFILE
+else
+profile_name=$(sed -n 's/profile.*=.*profile\.\(.*\)/\1/p' $TIZEN_SOURCE/.gbs.conf)
+fi
+
+LOCAL_REPO_DIR="$GBS_BUILD_ROOT/local/repos/$profile_name/$ARCH"
+
+#Building tizen source packages using gbs build
+cd $TIZEN_SOURCE
+gen_gbs_build_args
+
+if [ $NO_DEBUG_INFO_RPMS = true ]; then
+    gbs build --arch $ARCH --define '__debug_install_post %{nil}' --define 'debug_package %{nil}' $GBS_BUILD_ARGS || true 
+else
+    gbs build --arch $ARCH $GBS_BUILD_ARGS || true 
+fi
+
+
+#Publish repos, images and build reports
+if [ $PUBLISH = true -a -n "$PUBLISH_URL" ]; then
+    publish_artifacts
+fi
+
+#cleanup_and_exit 0

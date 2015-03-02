@@ -1,0 +1,211 @@
+#!/bin/bash -xe
+#
+# Copyright (c) 2014 Intel, Inc.
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by the Free
+# Software Foundation; version 2 of the License
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License along
+# with this program; if not, write to the Free Software Foundation, Inc., 59
+# Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+
+
+# COMMON ENVIRONMENT VARIABLES
+# $WORKSPACE is the jenkins workspace, the default is /var/lib/jenkins/workspace/%{jenkins_job_name}
+TMP_DIR="$WORKSPACE/.tmp"
+MIC_CACHE_DIR="$WORKSPACE/.mic-cache"
+TIZEN_SOURCE="$WORKSPACE/tizen"
+GBS_BUILD_ROOT="$WORKSPACE/GBS-ROOT"
+LOCAL_REPO_DIR=
+KS_FILES=
+if [ "$BUILD_TYPE" = "daily" ]; then
+    if [ -n "$TIZEN_UA_SNAPSHOT" ]; then
+        SNAPSHOT=${TIZEN_UA_SNAPSHOT}
+    fi
+    if [ -n "$TIZEN_SNAPSHOT" ]; then
+        SNAPSHOT="${SNAPSHOT}_${TIZEN_SNAPSHOT}"
+    fi
+fi
+BUILD_ID="$SNAPSHOT"
+OUTPUT_ROOT_DIR="$WORKSPACE/$JOB_NAME"
+OUTPUT_DIR="$OUTPUT_ROOT_DIR/$SNAPSHOT"
+PUBLISH_DIR="$PUBLISH_URL/$SNAPSHOT"
+GBS_BUILD_ARGS= # default enabled args
+
+# Prepare build env
+function prepare_build_env()
+{
+    test -e $TIZEN_SOURCE || mkdir -p $TIZEN_SOURCE
+    sudo rm -rf "$OUTPUT_ROOT_DIR"
+    mkdir -p $OUTPUT_DIR/repos
+    mkdir -p $OUTPUT_DIR/builddata
+    mkdir -p $OUTPUT_DIR/images
+    mkdir -p $OUTPUT_DIR/builddata/image-configs
+
+    test -e $TMP_DIR || mkdir $TMP_DIR
+}
+
+function cleanup_and_exit ()
+{
+    sudo rm $OUTPUT_DIR -rf
+    sudo rm $MIC_CACHE_DIR -rf
+    rm -rf $TMP_DIR
+    exit $1
+}
+
+# Build gbs args using jenkins job options
+function gen_gbs_build_args()
+{
+    GBS_BUILD_ARGS="-B $GBS_BUILD_ROOT $GBS_BUILD_ARGS $BUILD_ARGS "
+    [ -n "$GBS_PROFILE" ] && GBS_BUILD_ARGS="$GBS_BUILD_ARGS --profile=$GBS_PROFILE "
+    [ -n "$EXCLUDE_PACKAGES" ] && GBS_BUILD_ARGS="$GBS_BUILD_ARGS --exclude=$EXCLUDE_PACKAGES "
+    [ -n "$EXCLUDE_PACKAGES_FILE" ] && GBS_BUILD_ARGS="$GBS_BUILD_ARGS --exclude-from-file=$EXCLUDE_PACKAGES_FILE "
+    [ -n "$PACKAGES_FILE" ] && GBS_BUILD_ARGS="$GBS_BUILD_ARGS --package-from-file=$PACKAGES_FILE "
+    [ -z "$PARALEL_THREADS" ] && $PARALEL_THREADS="4"
+    GBS_BUILD_ARGS="$GBS_BUILD_ARGS --threads=$PARALEL_THREADS"
+    for repo in $REMOTE_REPOS
+    do
+        GBS_BUILD_ARGS="$GBS_BUILD_ARGS -R $repo"
+    done
+}
+
+#Create images
+function create_images()
+{
+    if [ -z "$KS_FILES" ]; then
+        echo "No KS files found, skip image creation"
+        return
+    fi
+
+    # Update ks files with custom web server
+    sed -i 's/@@WEBSERVER_URL@@/'${WEBSERVER_URL}'/g' $KS_FILES
+
+    # update ks file with build type - replace 'daily' with 'snapshot'
+    if [ "$BUILD_TYPE" = "snapshot" ]; then
+        sed -i 's/\/daily\//\/snapshot\//g' $KS_FILES
+    fi
+
+    # Update ks files with custom language
+    if [ -n "${CUSTOM_LANG}" ]; then
+        sed -i 's/lang .*/lang '"${CUSTOM_LANG}"'/' $KS_FILES
+    fi
+
+    # Update ks files with custom keyboard
+    if [ -n "${CUSTOM_KEYBOARD}" ]; then
+        sed -i 's/keyboard .*/keyboard '"${CUSTOM_KEYBOARD}"'/' $KS_FILES
+    fi
+
+    # Update ks files with custom timezone
+    if [ -n "${CUSTOM_TIMEZONE}" ]; then
+        sed -i 's/timezone --utc.*/timezone --utc '"${CUSTOM_TIMEZONE}"'/' $KS_FILES
+    fi
+
+    for ks in $KS_FILES
+    do
+        ks_file=$(basename $ks)
+        sudo mic cr auto $ks --release=${BUILD_ID} \
+                                     --logfile=${BUILD_ID}_${ks_file%.*} \
+                                     -o $OUTPUT_DIR/images \
+                                     --pack-to="${ks_file}_${BUILD_ID}.tar.gz" \
+                                     -A ${ARCH} \
+                                     --strict-mode \
+                                     --cachedir=${MIC_CACHE_DIR} || true
+    done
+
+    # publish images
+    if [ $PUBLISH = true -a \
+         -n "$PUBLISH_URL" -a \
+         -e "$OUTPUT_DIR/images/${BUILD_ID}/images" ]; then
+        if [ -n "$LOCAL_PUBLISHING_ONLY" ]; then
+            # sync with local web root e.g. /var/www/html
+            rsync -avzK $OUTPUT_DIR/images/${BUILD_ID}/images/* $PUBLISH_URL/${BUILD_ID}/images/
+            rsync -avzK $OUTPUT_DIR/builddata/image-configs/* $PUBLISH_URL/${BUILD_ID}/builddata/image-configs/
+        else
+            # sync with remote web server root if specified
+            rsync -avzK $OUTPUT_DIR/images/${BUILD_ID}/images/* $REMOTE_PUBLISH_SERVER:$REMOTE_PUBLISH_URL/${BUILD_ID}/images/
+            rsync -avzK $OUTPUT_DIR/builddata/image-configs/* $REMOTE_PUBLISH_SERVER:$REMOTE_PUBLISH_URL/${BUILD_ID}/builddata/image-configs/
+        fi
+    fi
+}
+
+#copy exclude packages from pre-built to RPMS folder
+function copy_prebuilts()
+{
+    TOOLCHAIN_DIR="toolchain-mipsel"
+
+    if [ $ARCH = "armv7hl" ]; then
+        TOOLCHAIN_DIR="toolchain-arm-bcm"
+    fi
+
+    pushd $LOCAL_REPO_DIR
+    cp $TIZEN_SOURCE/pre-built/${TOOLCHAIN_DIR}/aul* ./RPMS
+    cp $TIZEN_SOURCE/pre-built/${TOOLCHAIN_DIR}/libtool* ./RPMS
+    cp $TIZEN_SOURCE/pre-built/${TOOLCHAIN_DIR}/libltdl* ./RPMS
+    cp $TIZEN_SOURCE/pre-built/${TOOLCHAIN_DIR}/mic-bootstrap* ./RPMS
+    cp $TIZEN_SOURCE/pre-built/${TOOLCHAIN_DIR}/gettext-* ./RPMS
+    cp $TIZEN_SOURCE/pre-built/${TOOLCHAIN_DIR}/texinfo* ./RPMS
+
+
+    #Modify repodata in order to be able to use patterns in .ks file
+    rpm2cpio RPMS/package-groups-103-1.${ARCH}.rpm | cpio -idmv
+    createrepo ./ -g ./usr/share/package-groups/group.xml
+    modifyrepo ./usr/share/package-groups/group.xml ./repodata
+    modifyrepo ./usr/share/package-groups/patterns.xml ./repodata
+    rm -rf ./usr
+    popd
+}
+
+# publish build artifacts
+function publish_artifacts()
+{
+    cd $OUTPUT_DIR
+    if [ -e "$LOCAL_REPO_DIR/repodata" -a \
+         -e "$LOCAL_REPO_DIR/RPMS" -a \
+         -e "$LOCAL_REPO_DIR/logs" -a \
+         -e "$LOCAL_REPO_DIR/index.html" ]; then
+        ln -s "$LOCAL_REPO_DIR/repodata" "$LOCAL_REPO_DIR/RPMS" repos/
+        cp $LOCAL_REPO_DIR/index.html builddata/
+        ln -s $LOCAL_REPO_DIR/logs builddata/
+        rsync -avzk $OUTPUT_DIR $PUBLISH_URL || cleanup_and_exit 1
+
+        # generate diff report
+        if [ -e "$PUBLISH_URL/latest/repos" -a \
+             -e "$PUBLISH_DIR/repos" ]; then
+            repodiff --old=$PUBLISH_URL/latest/repos --new=$PUBLISH_DIR/repos >> $PUBLISH_DIR/repodiff.txt
+        fi
+
+        CURDIR=$PWD
+        cd $PUBLISH_URL
+
+        # remove 'latest' link
+        rm -f ./latest
+        ln -s ./$SNAPSHOT ./latest
+
+        RM_COUNT=
+
+        if [ -n "$LOCAL_PUBLISHING_ONLY" ]; then
+            RM_COUNT=6
+        else
+            rsync -avzK ./latest $REMOTE_PUBLISH_SERVER:$REMOTE_PUBLISH_URL
+            rsync -avzK ./$SNAPSHOT $REMOTE_PUBLISH_SERVER:$REMOTE_PUBLISH_URL
+            RM_COUNT=3
+        fi
+
+        # remove old reports
+        for dir in `ls -t | tail -n +${RM_COUNT}`
+        do
+            rm -rdfv ./$dir
+        done
+
+        cd $CURDIR
+    else
+        echo "No build report generated"
+    fi
+}
+
