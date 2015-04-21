@@ -26,9 +26,9 @@ function prepare_tizen_src()
     if [ "$BUILD_TYPE" = "snapshot" ]; then
         rm .repo/manifest.xml
         cp $WORKSPACE/manifest.xml .repo/manifest.xml
-        repo sync -d
+        repo sync -d -j 8
     else
-        repo sync
+        repo sync -j 8
     fi
     popd
 }
@@ -36,6 +36,7 @@ function prepare_tizen_src()
 # Get ks files via unpack image-configurations.rpm
 function get_ks_files
 {
+    echo "###GET_KS FILES"
     image_configurations_rpm=`find $LOCAL_REPO_DIR ! -name "image-configurations-debug*.noarch.rpm" -a -name "image-configurations*.noarch.rpm"`
     if [ -z $image_configurations_rpm ]; then
         echo "No image-configuation rpm generated, so can't get ks files"
@@ -48,10 +49,11 @@ function get_ks_files
     do
         echo $ks_file|grep "ks$" || continue
         ks_base_name=$(basename $ks_file)
+        echo "####KS_BASE_NAME=$ks_base_name"
 
         rpm2cpio $image_configurations_rpm |cpio -i --quiet --to-stdout $ks_file >"$OUTPUT_DIR/builddata/image-configs/$ks_base_name"
         KS_FILES="$KS_FILES $OUTPUT_DIR/builddata/image-configs/$ks_base_name"
-        echo "$KS_FILES"
+        echo "####KS_FILES=$KS_FILES"
 
     done
 }

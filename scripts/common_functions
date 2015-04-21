@@ -78,14 +78,16 @@ function gen_gbs_build_args()
 #Create images
 function create_images()
 {
+    echo "###create_images"
+
     if [ -z "$KS_FILES" ]; then
-        echo "No KS files found, skip image creation"
+        echo "#####No KS files found, skip image creation"
         return
     fi
 
     # Update ks files with custom web server
     sed -i 's/@@WEBSERVER_URL@@/'${WEBSERVER_URL}'/g' $KS_FILES
-
+    
     # update ks file with build type - replace 'daily' with 'snapshot'
     if [ "$BUILD_TYPE" = "snapshot" ]; then
         sed -i 's/\/daily\//\/snapshot\//g' $KS_FILES
@@ -106,15 +108,19 @@ function create_images()
         sed -i 's/timezone --utc.*/timezone --utc '"${CUSTOM_TIMEZONE}"'/' $KS_FILES
     fi
 
+echo "###  KS FILES $KS_FILES"
+
     for ks in $KS_FILES
     do
         ks_file=$(basename $ks)
+
+        echo "####create image $(basename $ks)"
+
         sudo mic cr auto $ks --release=${BUILD_ID} \
                                      --logfile=${BUILD_ID}_${ks_file%.*} \
                                      -o $OUTPUT_DIR/images \
                                      --pack-to="${ks_file}_${BUILD_ID}.tar.gz" \
                                      -A ${ARCH} \
-                                     --strict-mode \
                                      --cachedir=${MIC_CACHE_DIR} || true
     done
 
@@ -123,6 +129,10 @@ function create_images()
          -n "$PUBLISH_URL" -a \
          -e "$OUTPUT_DIR/images/${BUILD_ID}/images" ]; then
         if [ -n "$LOCAL_PUBLISHING_ONLY" ]; then
+           
+            mkdir -p $PUBLISH_URL/${BUILD_ID}/images/
+            mkdir -p $PUBLISH_URL/${BUILD_ID}/builddata/image-configs
+
             # sync with local web root e.g. /var/www/html
             rsync -avzK $OUTPUT_DIR/images/${BUILD_ID}/images/* $PUBLISH_URL/${BUILD_ID}/images/
             rsync -avzK $OUTPUT_DIR/builddata/image-configs/* $PUBLISH_URL/${BUILD_ID}/builddata/image-configs/
@@ -132,6 +142,8 @@ function create_images()
             rsync -avzK $OUTPUT_DIR/builddata/image-configs/* $REMOTE_PUBLISH_SERVER:$REMOTE_PUBLISH_URL/${BUILD_ID}/builddata/image-configs/
         fi
     fi
+
+echo "####done create image"
 }
 
 #copy exclude packages from pre-built to RPMS folder
@@ -164,21 +176,17 @@ function copy_prebuilts()
 # publish build artifacts
 function publish_artifacts()
 {
+    echo "###>>>>>>>>PUBLISH ARTIFATCS"
     cd $OUTPUT_DIR
     if [ -e "$LOCAL_REPO_DIR/repodata" -a \
          -e "$LOCAL_REPO_DIR/RPMS" -a \
          -e "$LOCAL_REPO_DIR/logs" -a \
          -e "$LOCAL_REPO_DIR/index.html" ]; then
         ln -s "$LOCAL_REPO_DIR/repodata" "$LOCAL_REPO_DIR/RPMS" repos/
-        cp $LOCAL_REPO_DIR/index.html builddata/
+        cp $LOCAL_REPO_DIR/index.html builddata/index.html
         ln -s $LOCAL_REPO_DIR/logs builddata/
         rsync -avzk $OUTPUT_DIR $PUBLISH_URL || cleanup_and_exit 1
 
-        # generate diff report
-        if [ -e "$PUBLISH_URL/latest/repos" -a \
-             -e "$PUBLISH_DIR/repos" ]; then
-            repodiff --old=$PUBLISH_URL/latest/repos --new=$PUBLISH_DIR/repos >> $PUBLISH_DIR/repodiff.txt
-        fi
 
         CURDIR=$PWD
         cd $PUBLISH_URL
@@ -204,8 +212,9 @@ function publish_artifacts()
         done
 
         cd $CURDIR
+        echo "###PUBLISH_ARTEFACTS DONE"
     else
-        echo "No build report generated"
+        echo "###No build report generated"
     fi
 }
 
