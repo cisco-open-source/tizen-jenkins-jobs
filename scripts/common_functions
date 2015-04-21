@@ -100,8 +100,11 @@ function create_images()
 
     # Update ks files with custom keyboard
     if [ -n "${CUSTOM_KEYBOARD}" ]; then
-        sed -i 's/keyboard .*/keyboard '"${CUSTOM_KEYBOARD}"'/' $KS_FILES
+        sed -i 's/@@CUSTOM_KEYBOARD@@/'${CUSTOM_KEYBOARD}'/g' $KS_FILES
+    else
+        sed -i 's/@@CUSTOM_KEYBOARD@@/fr/g' $KS_FILES
     fi
+
 
     # Update ks files with custom timezone
     if [ -n "${CUSTOM_TIMEZONE}" ]; then
