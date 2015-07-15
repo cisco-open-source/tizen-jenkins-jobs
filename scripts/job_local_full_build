@@ -26,9 +26,9 @@ function prepare_tizen_src()
     if [ "$BUILD_TYPE" = "snapshot" ]; then
         rm .repo/manifest.xml
         cp $WORKSPACE/manifest.xml .repo/manifest.xml
-        repo sync -d -j 8
+        repo sync -f -d -j 8
     else
-        repo sync -j 8
+        repo sync -f -j 8
     fi
     popd
 }
