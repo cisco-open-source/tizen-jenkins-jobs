@@ -22,7 +22,7 @@ source $jenkins_script_dir/common_functions
 function prepare_tizen_src()
 {
     pushd $TIZEN_SOURCE
-    repo init -u $MANIFEST_URL -b $MANIFEST_BRANCH -m ${PROFILE}.xml
+    repo --color=always init -u $MANIFEST_URL -b $MANIFEST_BRANCH -m ${PROFILE}.xml
     if [ "$BUILD_TYPE" = "snapshot" ]; then
         rm .repo/manifest.xml
         cp $WORKSPACE/manifest.xml .repo/manifest.xml
